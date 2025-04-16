@@ -1,6 +1,7 @@
 import matplotlib.pyplot as plt
 import cv2 as cv
 import numpy as np
+import random
 
 
 def compute_SIFT_kps_and_descriptors(image):
@@ -40,63 +41,66 @@ def get_top_correspondences(des1, des2, count=None):
     return good
 
 
-def normalize_points(pts):
-    """Normalize points so that the centroid is at the origin and the mean distance is sqrt(2)."""
-    pts = np.array(pts, dtype=np.float32)
-    mean = np.mean(pts, axis=0)
-    std = np.std(pts, axis=0).mean()
-    if std == 0:
-        std = 1
-    # Scale so that mean distance is sqrt(2)
-    scale = np.sqrt(2) / std
-    T = np.array(
-        [[scale, 0, -scale * mean[0]], [0, scale, -scale * mean[1]], [0, 0, 1]]
-    )
-    pts_hom = np.hstack([pts, np.ones((pts.shape[0], 1))])
-    pts_norm = (T @ pts_hom.T).T
-    return pts_norm[:, :2], T
-
-
-def compute_homography(matches, kp, kp_video):
+def compute_H(correspondences):
     """
-    A function that takes a set of matches and computes
-    the associated 3x3 homography matrix H using the normalized DLT algorithm.
-
-    :param kp: list of keypoints in the first image.
-    :param kp_video: list of keypoints in the second image.
-    :param matches: list of opencv matches.
-    :return: Homography matrix.
+    A function that computes the homography matrix H
+    from the given correspondences.
+    :param correspondences: A list of correspondences.
+    :return: The computed homography matrix H.
     """
-    if len(matches) < 4:
-        raise ValueError("At least four matches are required to compute homography.")
-
-    # Extract the points for both views
-    src_pts = np.float32([kp[m[0].queryIdx].pt for m in matches]).reshape(-1, 2)
-    dst_pts = np.float32([kp_video[m[0].trainIdx].pt for m in matches]).reshape(-1, 2)
-
-    # Normalize points (just for numerical stability)
-    src_pts_norm, T_src = normalize_points(src_pts)
-    dst_pts_norm, T_dst = normalize_points(dst_pts)
-
-    # Construct matrix A for normalized coordinates
-    N = src_pts_norm.shape[0]
     A = []
-    for i in range(N):
-        x, y = src_pts_norm[i]
-        _x, _y = dst_pts_norm[i]
-        A.append([-x, -y, -1, 0, 0, 0, x * _x, y * _x, _x])
-        A.append([0, 0, 0, -x, -y, -1, x * _y, y * _y, _y])
+    for p, p_dash in correspondences:
+        A.append(
+            [-p[0], -p[1], -1, 0, 0, 0, p[0] * p_dash[0], p[1] * p_dash[0], p_dash[0]]
+        )
+        A.append(
+            [0, 0, 0, -p[0], -p[1], -1, p[0] * p_dash[1], p[1] * p_dash[1], p_dash[1]]
+        )
+
     A = np.array(A)
-
-    # Solve using SVD
-    U, S, Vt = np.linalg.svd(A)
-    H_norm = Vt[-1].reshape(3, 3)
-
-    # Denormalize: H = T_dst^-1 * H_norm * T_src
-    H = np.linalg.inv(T_dst) @ H_norm @ T_src
-    H /= H[2, 2]  # Normalize such that H[2,2] is 1
+    U, D, V_transpose = np.linalg.svd(A)
+    H = np.reshape(V_transpose[8], (3, 3))
+    H /= H[2, 2]
 
     return H
+
+
+def RANSAC(correspondences):
+    """
+    A function that implements the RANSAC algorithm to find the best
+    homography matrix H from the given correspondences.
+    :param correspondences: A list of correspondences.
+    :return: The best homography matrix H.
+    """
+    max_inliers = []
+
+    for _ in range(500):
+
+        random_indices = random.sample(range(0, len(correspondences)), 4)
+        random_correspondences = [correspondences[i] for i in random_indices]
+
+        H = compute_H(random_correspondences)
+
+        curr_inliers = []
+        for corr in correspondences:
+            P = corr[0]
+            mapped_P = tuple(
+                map(
+                    int,
+                    (
+                        np.dot(H, np.transpose([P[0], P[1], 1]))
+                        / (np.dot(H, np.transpose([P[0], P[1], 1]))[2])
+                    ).astype(int)[:2],
+                )
+            )
+            e = np.linalg.norm(np.asarray(corr[1]) - np.asarray(mapped_P))
+            if e < 5:
+                curr_inliers.append(corr)
+
+        if len(curr_inliers) > len(max_inliers):
+            max_inliers = curr_inliers
+
+    return compute_H(max_inliers)
 
 
 def show_image(image, title=None):
@@ -144,7 +148,8 @@ def read_video(path):
         ret, frame = cap.read()
         if not ret:
             break
-        frames.append(BGR2RGB(frame))
+        rgb_frame = BGR2RGB(frame)
+        frames.append(rgb_frame)
     cap.release()
     return frames
 
