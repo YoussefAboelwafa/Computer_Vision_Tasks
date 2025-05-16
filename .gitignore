@@ -2,4 +2,5 @@
 .venv/
 asg4/coco
 asg4/COCO
+asg4/PASCAL-VOC
 .DS_Store
