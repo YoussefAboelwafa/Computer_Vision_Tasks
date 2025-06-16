@@ -10,3 +10,12 @@
 
 # Assignment 3
   - Stereo Vision & Depth Estimation
+
+# Assignment 4
+
+Inference on COCO2017 and PASCAL-VOC2012 using:
+
+- DETR
+- YOLO
+- Faster R-CNN
+
